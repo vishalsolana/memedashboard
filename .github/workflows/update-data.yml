@@ -31,7 +31,9 @@ jobs:
         run: node scripts/update.mjs
         env:
           BITQUERY_TOKEN: ${{ secrets.BITQUERY_TOKEN }}
-          BACKFILL_DAYS: ${{ vars.BACKFILL_DAYS || '30' }}
+          BITQUERY_DATASET: ${{ vars.BITQUERY_DATASET || 'realtime' }}
+          BACKFILL_DAYS: ${{ vars.BACKFILL_DAYS || '0' }}
+          SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
           MAX_GECKO_CALLS: ${{ inputs.max_gecko_calls || '300' }}
 
       - name: Commit

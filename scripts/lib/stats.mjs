@@ -39,9 +39,12 @@ export function addCreates(state, rows) {
 
 export function addBonds(state, bonds) {
   const added = [];
-  for (const { mint, bonded_at } of bonds) {
+  for (const { mint, bonded_at, signature = null } of bonds) {
     const t = state.tokens[mint] ?? newToken();
-    if (t.bonded_at == null || bonded_at < t.bonded_at) t.bonded_at = bonded_at;
+    if (t.bonded_at == null || bonded_at < t.bonded_at) {
+      t.bonded_at = bonded_at;
+      t.bond_sig = signature;
+    }
     if (!state.tokens[mint]) added.push(mint);
     state.tokens[mint] = t;
   }
@@ -51,7 +54,9 @@ export function addBonds(state, bonds) {
 function newToken() {
   return {
     created_at: null,
+    create_checked: false, // true once the create time was found or given up on
     bonded_at: null,
+    bond_sig: null,
     pool: null,
     pool_lookups: 0,
     name: null,

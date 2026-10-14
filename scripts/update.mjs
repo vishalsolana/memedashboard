@@ -3,15 +3,20 @@
 // Env:
 //   BITQUERY_TOKEN          Bitquery access token (required unless --skip-bitquery)
 //   BITQUERY_URL            GraphQL endpoint (default https://streaming.bitquery.io/graphql)
-//   BACKFILL_DAYS           days to backfill on the first run (default 30)
+//   BITQUERY_DATASET        realtime (free plan, default) or combined (paid, has history)
+//   BACKFILL_DAYS           days to backfill on the first run (default 0: start of today)
+//   SOLANA_RPC_URL          RPC for create times older than Bitquery realtime holds
+//                           (default public mainnet; a free Helius URL is more reliable)
+//   MAX_RPC_CALLS           RPC call budget for this run (default 400)
 //   TTB_LOOKBACK_DAYS       how far before a bond to look for its create (default 30)
 //   MAX_GECKO_CALLS         GeckoTerminal call budget for this run (default 300)
-// Flags: --skip-bitquery, --skip-gecko
+// Flags: --skip-bitquery, --skip-rpc, --skip-gecko
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Bitquery } from './lib/bitquery.mjs';
 import { Gecko, updateHighs } from './lib/gecko.mjs';
+import { SolanaRpc } from './lib/rpc.mjs';
 import { addBonds, addCreates, buildPublic, DAY, emptyState, nextWindow, prune } from './lib/stats.mjs';
 
 const root = new URL('../', import.meta.url);
@@ -28,8 +33,12 @@ async function main() {
 
   if (!args.has('--skip-bitquery')) {
     if (!env.BITQUERY_TOKEN) throw new Error('BITQUERY_TOKEN is required (or pass --skip-bitquery)');
-    const bq = new Bitquery({ token: env.BITQUERY_TOKEN, url: env.BITQUERY_URL || undefined });
-    const { since, till } = nextWindow(state.cursor, now(), Number(env.BACKFILL_DAYS ?? 30));
+    const bq = new Bitquery({
+      token: env.BITQUERY_TOKEN,
+      url: env.BITQUERY_URL || undefined,
+      dataset: env.BITQUERY_DATASET || undefined,
+    });
+    const { since, till } = nextWindow(state.cursor, now(), Number(env.BACKFILL_DAYS || 0));
     console.log(`bitquery: window ${fmt(since)} -> ${fmt(till)}`);
 
     // Fetch everything first, then merge, so a failed run leaves state untouched
@@ -42,7 +51,7 @@ async function main() {
 
     addCreates(state, creates);
     addBonds(state, bonds);
-    for (const [mint, at] of created) state.tokens[mint].created_at = at;
+    for (const [mint, at] of created) Object.assign(state.tokens[mint], { created_at: at, create_checked: true });
     state.cursor = fmt(till);
     console.log(
       `bitquery: ${creates.reduce((a, r) => a + r.created, 0)} creates, ${bonds.length} bonds, ${created.size} create times`,
@@ -50,6 +59,16 @@ async function main() {
   }
 
   prune(state, now());
+
+  if (!args.has('--skip-rpc')) {
+    const rpc = new SolanaRpc({ url: env.SOLANA_RPC_URL || undefined, budget: Number(env.MAX_RPC_CALLS ?? 400) });
+    try {
+      const r = await fillCreateTimes(state, rpc);
+      console.log(`rpc: ${r.found} create times found, ${r.left} left, ${rpc.calls} calls`);
+    } catch (err) {
+      console.log(`::warning::rpc stopped early, will retry next run: ${err.message}`);
+    }
+  }
 
   if (!args.has('--skip-gecko')) {
     const gecko = new Gecko({ budget: Number(env.MAX_GECKO_CALLS ?? 300) });
@@ -65,6 +84,24 @@ async function main() {
   await writeFile(STATE, JSON.stringify(state) + '\n');
   await writeFile(PUBLIC, JSON.stringify(buildPublic(state, now())) + '\n');
   console.log(`wrote ${Object.keys(state.tokens).length} tokens, ${Object.keys(state.days).length} days`);
+}
+
+// Create times Bitquery could not see, newest bonds first, within the RPC budget.
+async function fillCreateTimes(state, rpc) {
+  const queue = Object.entries(state.tokens)
+    .filter(([, t]) => t.created_at == null && !t.create_checked)
+    .sort(([, a], [, b]) => b.bonded_at - a.bonded_at);
+  let found = 0;
+  for (const [mint, t] of queue) {
+    const at = await rpc.createTime(mint, t.bond_sig);
+    if (at === undefined) break; // budget ran out mid-walk; retry next run
+    t.create_checked = true;
+    if (at != null && at <= t.bonded_at) {
+      t.created_at = at;
+      found++;
+    }
+  }
+  return { found, left: queue.length - found };
 }
 
 async function loadState() {

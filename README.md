@@ -14,6 +14,7 @@ and Vercel serves the `public/` folder.
 ```
 GitHub Actions (every 3h)
   ├─ Bitquery      → daily creates + bonded tokens   (scripts/lib/bitquery.mjs)
+  ├─ Solana RPC    → create time of slow bonders     (scripts/lib/rpc.mjs)
   ├─ GeckoTerminal → 24h post-bond peak per token    (free, no key)
   └─ commits data/state.json + public/data.json
         ↓ push
@@ -26,19 +27,24 @@ Vercel → static site in public/ reads data.json
 1. Sign up at [bitquery.io](https://bitquery.io).
 2. Create an access token at [account.bitquery.io → API v2 → Access tokens](https://account.bitquery.io/user/api_v2/access_tokens).
 3. **Test the queries first** in the [Bitquery IDE](https://ide.bitquery.io). Paste in each query
-   from `scripts/lib/bitquery.mjs` (`CREATES_PER_DAY`, `MIGRATIONS`, `CREATES_FOR_MINTS`) with
-   variables like:
+   from `scripts/lib/bitquery.mjs` (`CREATES_PER_DAY`, `MIGRATIONS`, `CREATES_FOR_MINTS`), replace
+   `$DATASET` with `realtime`, and use variables covering the last few hours, like:
    ```json
-   {"since": "2026-10-13T00:00:00Z", "till": "2026-10-14T00:00:00Z", "limit": 10, "offset": 0}
+   {"since": "2026-10-14T06:00:00Z", "till": "2026-10-14T09:00:00Z", "limit": 10, "offset": 0}
    ```
-   `CREATES_PER_DAY` should return one row with a count in the tens of thousands. `MIGRATIONS` should return
-   rows whose accounts include a mint ending in `pump`. Check how many points each query used.
+   Check how many points each query used.
+
+**The free plan only allows the `realtime` dataset** (recent data), so there's no backfill. History
+fills in from the first run, and the first full UTC day appears the day after you start. On a paid
+plan, set the repo variable `BITQUERY_DATASET` = `combined` and `BACKFILL_DAYS` = `30` to backfill.
+Runs must not stop for longer than realtime keeps data, or that gap is under-counted.
 
 ### 2. GitHub
 In the repo settings → *Secrets and variables* → *Actions*:
 - Secret `BITQUERY_TOKEN`: your Bitquery access token
-- Variable `BACKFILL_DAYS` (optional, default `30`): how many past days the first run fetches.
-  Lower it if your plan can't query that far back or the first run uses too many points.
+- Secret `SOLANA_RPC_URL` (optional but recommended): a free [Helius](https://helius.dev) RPC URL
+  (`https://mainnet.helius-rpc.com/?api-key=…`). Without it the script uses the public Solana RPC,
+  which often rate-limits GitHub's servers.
 
 Also set *Settings → Actions → General → Workflow permissions* to **Read and write**.
 
@@ -67,9 +73,10 @@ npm run dev                               # serve public/ on localhost
   window since the previous run (minus the newest 10 minutes) and adds it on. Windows never
   overlap, and a failed run retries the same window.
 - **Bonded**: the pump.fun `migrate` instruction, which moves a filled curve to PumpSwap. It
-  follows the curve filling within seconds. Time to bond needs the token's create within
-  `TTB_LOOKBACK_DAYS` (default 30) before the bond. Older tokens count as bonded but are left out of
-  the time stats (`ttb_unknown`).
+  follows the curve filling within seconds.
+- **Time to bond**: the create time comes from Bitquery when realtime still holds it. Otherwise it
+  comes from Solana RPC: the oldest transaction on the mint, walking back from the bond. Tokens with
+  more than 30,000 pre-bond transactions are skipped and left out of the time stats (`ttb_unknown`).
 - **High**: highest 15-minute candle (USD) from GeckoTerminal for the token's PumpSwap pool, from
   bond time to bond + 24h, × 1B supply. A day's highs are marked *settling* until every token
   bonded that day has passed its 24h window. A single spike trade can set a token's high, which
@@ -82,6 +89,8 @@ npm run dev                               # serve public/ on localhost
   one query per 50 bonded tokens for create times. Watch your points usage after the first few
   days. If it's too high, change the cron in `.github/workflows/update-data.yml` to every 4–6 hours
   (each run then covers a longer window with the same number of queries).
+- **Solana RPC**: up to 400 `getSignaturesForAddress` calls per run (`MAX_RPC_CALLS`), usually
+  1–3 per bonded token. That fits a free Helius plan.
 - **GeckoTerminal**: free API, about 30 calls/min. The script spaces calls 2.2s apart and stops
   at `MAX_GECKO_CALLS` per run.
 - **Vercel Hobby** is for non-commercial use. A commercial public dashboard needs a Pro plan

@@ -7,12 +7,14 @@
 export const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 const DEFAULT_URL = 'https://streaming.bitquery.io/graphql';
 const PAGE = 1000;
+// The free plan only allows "realtime" (recent data); paid plans can use "combined".
+const DEFAULT_DATASET = 'realtime';
 const MINT_BATCH = 50;
 
 // Tokens created per UTC day inside [since, till).
 export const CREATES_PER_DAY = `
 query CreatesPerDay($since: DateTime!, $till: DateTime!) {
-  Solana(dataset: combined) {
+  Solana(dataset: $DATASET) {
     Instructions(
       where: {
         Instruction: {Program: {Address: {is: "${PUMP_PROGRAM}"}, Method: {in: ["create", "create_v2"]}}}
@@ -29,7 +31,7 @@ query CreatesPerDay($since: DateTime!, $till: DateTime!) {
 // Bonded tokens: pump.fun's migrate instruction moves a filled curve to PumpSwap.
 export const MIGRATIONS = `
 query Migrations($since: DateTime!, $till: DateTime!, $limit: Int!, $offset: Int!) {
-  Solana(dataset: combined) {
+  Solana(dataset: $DATASET) {
     Instructions(
       where: {
         Instruction: {Program: {Address: {is: "${PUMP_PROGRAM}"}, Method: {is: "migrate"}}}
@@ -40,6 +42,7 @@ query Migrations($since: DateTime!, $till: DateTime!, $limit: Int!, $offset: Int
       limit: {count: $limit, offset: $offset}
     ) {
       Block { Time }
+      Transaction { Signature }
       Instruction { Accounts { Address } }
     }
   }
@@ -48,7 +51,7 @@ query Migrations($since: DateTime!, $till: DateTime!, $limit: Int!, $offset: Int
 // Create time for a batch of mints (mint is the first account of create/create_v2).
 export const CREATES_FOR_MINTS = `
 query CreatesForMints($mints: [String!], $since: DateTime!) {
-  Solana(dataset: combined) {
+  Solana(dataset: $DATASET) {
     Instructions(
       where: {
         Instruction: {
@@ -67,9 +70,10 @@ query CreatesForMints($mints: [String!], $since: DateTime!) {
 }`;
 
 export class Bitquery {
-  constructor({ token, url = DEFAULT_URL, log = console.log }) {
+  constructor({ token, url = DEFAULT_URL, dataset = DEFAULT_DATASET, log = console.log }) {
     this.token = token;
     this.url = url;
+    this.dataset = dataset;
     this.log = log;
   }
 
@@ -77,7 +81,7 @@ export class Bitquery {
     const res = await fetch(this.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` },
-      body: JSON.stringify({ query, variables }),
+      body: JSON.stringify({ query: query.replaceAll('$DATASET', this.dataset), variables }),
     });
     const text = await res.text();
     if (!res.ok) throw new Error(`bitquery: ${res.status}: ${text.slice(0, 300)}`);
@@ -95,7 +99,7 @@ export class Bitquery {
     }));
   }
 
-  // -> [{ mint, bonded_at }], earliest migration per mint
+  // -> [{ mint, bonded_at, signature }], earliest migration per mint
   async migrations(since, till) {
     const out = new Map();
     for (let offset = 0; ; offset += PAGE) {
@@ -104,12 +108,14 @@ export class Bitquery {
       for (const r of rows) {
         const mint = migrateMint(r.Instruction.Accounts.map((a) => a.Address));
         const at = toTs(r.Block.Time);
-        if (mint && !(out.get(mint) <= at)) out.set(mint, at);
+        if (mint && !(out.get(mint)?.bonded_at <= at)) {
+          out.set(mint, { mint, bonded_at: at, signature: r.Transaction?.Signature ?? null });
+        }
       }
       if (rows.length < PAGE) break;
     }
     this.log(`bitquery: ${out.size} migrations`);
-    return [...out].map(([mint, bonded_at]) => ({ mint, bonded_at }));
+    return [...out.values()];
   }
 
   // -> Map(mint -> created_at) for the mints whose create was found after `since`
