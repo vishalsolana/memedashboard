@@ -30,8 +30,8 @@ jobs:
       - name: Fetch data
         run: node scripts/update.mjs
         env:
-          DUNE_API_KEY: ${{ secrets.DUNE_API_KEY }}
-          DUNE_QUERY_ID: ${{ vars.DUNE_QUERY_ID }}
+          BITQUERY_TOKEN: ${{ secrets.BITQUERY_TOKEN }}
+          BACKFILL_DAYS: ${{ vars.BACKFILL_DAYS || '30' }}
           MAX_GECKO_CALLS: ${{ inputs.max_gecko_calls || '300' }}
 
       - name: Commit

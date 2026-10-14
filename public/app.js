@@ -45,8 +45,8 @@ async function load() {
     return;
   }
   const full = (data.days ?? []).filter((d) => !d.partial && d.created != null);
-  $('updated').textContent = data.last_dune_sync
-    ? `Updated ${ago(data.last_dune_sync)} · refreshed every 3h · UTC days`
+  $('updated').textContent = data.last_sync
+    ? `Updated ${ago(data.last_sync)} · refreshed every 3h · UTC days`
     : 'Waiting for the first data refresh';
   if (!full.length) {
     $('notice').hidden = false;

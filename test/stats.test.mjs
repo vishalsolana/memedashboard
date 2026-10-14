@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPublic, DAY, daysToScan, emptyState, mergeDuneRows, prune, quantile } from '../scripts/lib/stats.mjs';
+import { addBonds, addCreates, buildPublic, DAY, emptyState, LAG, nextWindow, prune, quantile } from '../scripts/lib/stats.mjs';
+import { migrateMint } from '../scripts/lib/bitquery.mjs';
 import { needsHigh } from '../scripts/lib/gecko.mjs';
 
 const NOW = Date.UTC(2026, 9, 14, 12) / 1000; // 2026-10-14 12:00 UTC
@@ -12,22 +13,34 @@ test('quantile interpolates', () => {
   assert.equal(quantile([], 0.5), null);
 });
 
-test('daysToScan covers the gap since last sync and rescans yesterday', () => {
-  assert.equal(daysToScan(null, NOW), 32);
-  assert.equal(daysToScan(new Date((NOW - 3600) * 1000).toISOString(), NOW), 2);
-  assert.equal(daysToScan(new Date((NOW - 3 * DAY) * 1000).toISOString(), NOW), 5);
-  assert.equal(daysToScan(new Date((NOW - 90 * DAY) * 1000).toISOString(), NOW), 32);
+test('nextWindow backfills once, then continues from the cursor', () => {
+  const first = nextWindow(null, NOW);
+  assert.equal(first.since, NOW - 12 * 3600 - 30 * DAY);
+  assert.equal(first.till, NOW - LAG);
+  assert.equal(nextWindow(null, NOW, 2).since, NOW - 12 * 3600 - 2 * DAY);
+  const cursor = new Date((NOW - 3 * 3600) * 1000).toISOString();
+  assert.deepEqual(nextWindow(cursor, NOW), { since: NOW - 3 * 3600, till: NOW - LAG });
+  const stale = new Date((NOW - 60 * DAY) * 1000).toISOString();
+  assert.equal(nextWindow(stale, NOW).since, NOW - 12 * 3600 - 30 * DAY);
+});
+
+test('migrateMint prefers the vanity pump mint', () => {
+  assert.equal(migrateMint(['G', 'W', 'abcpump', 'BC']), 'abcpump');
+  assert.equal(migrateMint(['G', 'W', 'Mint', 'BC']), 'Mint');
 });
 
 test('merge, prune and daily stats', () => {
   const s = emptyState();
-  mergeDuneRows(s, [
-    { kind: 'day', day: '2026-10-13', created: 20000 },
-    { kind: 'bond', mint: 'A', created_ts: YESTERDAY + 100, bonded_ts: YESTERDAY + 700, pool: 'PA' },
-    { kind: 'bond', mint: 'B', created_ts: YESTERDAY - 3000, bonded_ts: YESTERDAY + 1000, pool: null },
-    { kind: 'bond', mint: 'C', created_ts: null, bonded_ts: YESTERDAY + 2000, pool: null },
-    { kind: 'bond', mint: 'OLD', created_ts: null, bonded_ts: NOW - 40 * DAY, pool: null },
+  addCreates(s, [{ day: '2026-10-13', created: 12000 }]);
+  addCreates(s, [{ day: '2026-10-13', created: 8000 }]); // a later window adds up
+  addBonds(s, [
+    { mint: 'A', bonded_at: YESTERDAY + 700 },
+    { mint: 'B', bonded_at: YESTERDAY + 1000 },
+    { mint: 'C', bonded_at: YESTERDAY + 2000 },
+    { mint: 'OLD', bonded_at: NOW - 40 * DAY },
   ]);
+  s.tokens.A.created_at = YESTERDAY + 100;
+  s.tokens.B.created_at = YESTERDAY - 3000;
   Object.assign(s.tokens.A, { high_price: 0.0001, high_final: true, high_status: 'ok', symbol: 'AAA' });
   Object.assign(s.tokens.B, { high_price: 0.0003, high_final: false, high_status: 'ok' });
   Object.assign(s.tokens.C, { high_final: true, high_status: 'no_pool' });
@@ -52,8 +65,10 @@ test('merge, prune and daily stats', () => {
   assert.equal(y.high_final, false);
   assert.deepEqual(out.top['2026-10-13'].map((t) => t.mint), ['B', 'A']);
 
-  // A later sync keeps the pool learned earlier.
-  mergeDuneRows(s, [{ kind: 'bond', mint: 'A', created_ts: YESTERDAY + 100, bonded_ts: YESTERDAY + 700, pool: null }]);
+  // Seeing a bond again keeps its earliest time and what was learned since.
+  s.tokens.A.pool = 'PA';
+  assert.deepEqual(addBonds(s, [{ mint: 'A', bonded_at: YESTERDAY + 900 }]), []);
+  assert.equal(s.tokens.A.bonded_at, YESTERDAY + 700);
   assert.equal(s.tokens.A.pool, 'PA');
 });
 

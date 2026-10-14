@@ -1,4 +1,4 @@
-// Pure functions: merge Dune rows into state, prune, and build the public payload.
+// Pure functions: merge fetched data into state, prune, and build the public payload.
 
 export const DAY = 86400;
 export const WINDOW_DAYS = 30;
@@ -8,7 +8,7 @@ export const PUMP_SUPPLY = 1_000_000_000; // every pump.fun token mints 1B suppl
 const TOP_PER_DAY = 10;
 
 export function emptyState() {
-  return { version: 1, last_dune_sync: null, days: {}, tokens: {} };
+  return { version: 2, cursor: null, days: {}, tokens: {} };
 }
 
 export function dayKey(ts) {
@@ -19,34 +19,33 @@ export function startOfDay(ts) {
   return Math.floor(ts / DAY) * DAY;
 }
 
-// How many whole days (counting today) the Dune query must scan to cover
-// everything since the last successful sync. Always rescans yesterday so
-// late-indexed rows land, and caps at the window plus one.
-export function daysToScan(lastSyncIso, now) {
-  if (!lastSyncIso) return WINDOW_DAYS + 2;
-  const last = Date.parse(lastSyncIso) / 1000;
-  if (!Number.isFinite(last)) return WINDOW_DAYS + 2;
-  const days = Math.floor((startOfDay(now) - startOfDay(last)) / DAY) + 2;
-  return Math.min(Math.max(days, 2), WINDOW_DAYS + 2);
+export const LAG = 10 * 60; // leave the newest 10 minutes for the indexer to catch up
+
+// The next [since, till) window to fetch. Windows never overlap, so per-day
+// create counts can be added up across runs. First run backfills `backfillDays`.
+export function nextWindow(cursorIso, now, backfillDays = WINDOW_DAYS) {
+  const till = now - LAG;
+  const floor = startOfDay(now) - WINDOW_DAYS * DAY;
+  const cursor = cursorIso ? Date.parse(cursorIso) / 1000 : NaN;
+  const since = Number.isFinite(cursor) && cursor >= floor ? cursor : Math.max(floor, startOfDay(now) - backfillDays * DAY);
+  return { since, till: Math.max(since, till) };
 }
 
-export function mergeDuneRows(state, rows) {
-  let days = 0;
-  let bonds = 0;
-  for (const row of rows) {
-    if (row.kind === 'day' && row.day) {
-      state.days[row.day] = { created: Number(row.created) };
-      days++;
-    } else if (row.kind === 'bond' && row.mint && row.bonded_ts != null) {
-      const t = state.tokens[row.mint] ?? newToken();
-      t.bonded_at = Math.round(Number(row.bonded_ts));
-      if (row.created_ts != null) t.created_at = Math.round(Number(row.created_ts));
-      if (row.pool && !t.pool) t.pool = row.pool;
-      state.tokens[row.mint] = t;
-      bonds++;
-    }
+export function addCreates(state, rows) {
+  for (const { day, created } of rows) {
+    state.days[day] = { created: (state.days[day]?.created ?? 0) + created };
   }
-  return { days, bonds };
+}
+
+export function addBonds(state, bonds) {
+  const added = [];
+  for (const { mint, bonded_at } of bonds) {
+    const t = state.tokens[mint] ?? newToken();
+    if (t.bonded_at == null || bonded_at < t.bonded_at) t.bonded_at = bonded_at;
+    if (!state.tokens[mint]) added.push(mint);
+    state.tokens[mint] = t;
+  }
+  return added;
 }
 
 function newToken() {
@@ -164,10 +163,10 @@ export function buildPublic(state, now) {
 
   return {
     generated_at: new Date(now * 1000).toISOString(),
-    last_dune_sync: state.last_dune_sync,
+    last_sync: state.cursor,
     window_days: WINDOW_DAYS,
     method: {
-      bonded: 'pump.fun CompleteEvent (bonding curve filled), counted on the UTC day it happened',
+      bonded: 'pump.fun migrate instruction (curve filled, moved to PumpSwap), counted on the UTC day it happened',
       time_to_bond: 'bonded time minus create time, per token, grouped by bond day',
       high: 'peak USD price in the first 24h after bonding (GeckoTerminal 15m candles) x 1B supply',
     },

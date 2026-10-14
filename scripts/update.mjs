@@ -1,17 +1,18 @@
-// Refreshes data/state.json from Dune + GeckoTerminal and writes public/data.json.
+// Refreshes data/state.json from Bitquery + GeckoTerminal and writes public/data.json.
 //
 // Env:
-//   DUNE_API_KEY      Dune API key (required unless --skip-dune)
-//   DUNE_QUERY_ID     id of the saved query from queries/pumpfun_daily.sql
-//   MAX_GECKO_CALLS   GeckoTerminal call budget for this run (default 300)
-//   TTB_LOOKBACK_DAYS how far back to look for a bonded token's create (default 30)
-// Flags: --skip-dune, --skip-gecko
+//   BITQUERY_TOKEN          Bitquery access token (required unless --skip-bitquery)
+//   BITQUERY_URL            GraphQL endpoint (default https://streaming.bitquery.io/graphql)
+//   BACKFILL_DAYS           days to backfill on the first run (default 30)
+//   TTB_LOOKBACK_DAYS       how far before a bond to look for its create (default 30)
+//   MAX_GECKO_CALLS         GeckoTerminal call budget for this run (default 300)
+// Flags: --skip-bitquery, --skip-gecko
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { runQuery } from './lib/dune.mjs';
+import { Bitquery } from './lib/bitquery.mjs';
 import { Gecko, updateHighs } from './lib/gecko.mjs';
-import { buildPublic, daysToScan, emptyState, mergeDuneRows, prune } from './lib/stats.mjs';
+import { addBonds, addCreates, buildPublic, DAY, emptyState, nextWindow, prune } from './lib/stats.mjs';
 
 const root = new URL('../', import.meta.url);
 const STATE = fileURLToPath(new URL('data/state.json', root));
@@ -19,25 +20,33 @@ const PUBLIC = fileURLToPath(new URL('public/data.json', root));
 
 const args = new Set(process.argv.slice(2));
 const env = process.env;
+const now = () => Math.floor(Date.now() / 1000);
+const fmt = (ts) => new Date(ts * 1000).toISOString();
 
 async function main() {
   const state = await loadState();
-  const now = () => Math.floor(Date.now() / 1000);
 
-  if (!args.has('--skip-dune')) {
-    if (!env.DUNE_API_KEY || !env.DUNE_QUERY_ID) {
-      throw new Error('DUNE_API_KEY and DUNE_QUERY_ID are required (or pass --skip-dune)');
-    }
-    const days = daysToScan(state.last_dune_sync, now());
-    console.log(`dune: scanning ${days} days`);
-    const rows = await runQuery({
-      apiKey: env.DUNE_API_KEY,
-      queryId: env.DUNE_QUERY_ID,
-      params: { days, ttb_lookback_days: Number(env.TTB_LOOKBACK_DAYS ?? 30) },
-    });
-    const merged = mergeDuneRows(state, rows);
-    console.log(`dune: merged ${merged.days} day rows, ${merged.bonds} bonded tokens`);
-    state.last_dune_sync = new Date().toISOString();
+  if (!args.has('--skip-bitquery')) {
+    if (!env.BITQUERY_TOKEN) throw new Error('BITQUERY_TOKEN is required (or pass --skip-bitquery)');
+    const bq = new Bitquery({ token: env.BITQUERY_TOKEN, url: env.BITQUERY_URL || undefined });
+    const { since, till } = nextWindow(state.cursor, now(), Number(env.BACKFILL_DAYS ?? 30));
+    console.log(`bitquery: window ${fmt(since)} -> ${fmt(till)}`);
+
+    // Fetch everything first, then merge, so a failed run leaves state untouched
+    // and the next run retries the same window.
+    const creates = await bq.createsPerDay(since, till);
+    const bonds = await bq.migrations(since, till);
+    const lookback = Number(env.TTB_LOOKBACK_DAYS ?? 30) * DAY;
+    const earliest = Math.min(...bonds.map((b) => b.bonded_at), till);
+    const created = await bq.createTimes(bonds.map((b) => b.mint), earliest - lookback);
+
+    addCreates(state, creates);
+    addBonds(state, bonds);
+    for (const [mint, at] of created) state.tokens[mint].created_at = at;
+    state.cursor = fmt(till);
+    console.log(
+      `bitquery: ${creates.reduce((a, r) => a + r.created, 0)} creates, ${bonds.length} bonds, ${created.size} create times`,
+    );
   }
 
   prune(state, now());
@@ -60,7 +69,9 @@ async function main() {
 
 async function loadState() {
   try {
-    return { ...emptyState(), ...JSON.parse(await readFile(STATE, 'utf8')) };
+    const saved = JSON.parse(await readFile(STATE, 'utf8'));
+    // State from the earlier Dune version has no cursor; start fresh.
+    return saved.version === 2 ? saved : emptyState();
   } catch (err) {
     if (err.code === 'ENOENT') return emptyState();
     throw err;
