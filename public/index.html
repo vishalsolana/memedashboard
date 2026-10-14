@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pump.fun Daily</title>
+    <meta name="description" content="Tokens created and bonded on pump.fun per day, time to bond, and post-bond highs." />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="top">
+        <div>
+          <h1>Pump.fun daily</h1>
+          <p class="sub" id="updated">Loading…</p>
+        </div>
+        <div class="range" role="group" aria-label="Date range">
+          <button type="button" data-range="7">7d</button>
+          <button type="button" data-range="14">14d</button>
+          <button type="button" data-range="30" aria-pressed="true">30d</button>
+        </div>
+      </header>
+
+      <p class="notice" id="notice" hidden></p>
+
+      <section class="tiles" id="tiles" aria-label="Yesterday's numbers"></section>
+      <p class="today" id="today"></p>
+
+      <section class="grid">
+        <figure class="card" id="chart-created">
+          <figcaption><h2>Tokens created per day</h2></figcaption>
+          <div class="plot"></div>
+        </figure>
+        <figure class="card" id="chart-bonded">
+          <figcaption><h2>Tokens bonded per day</h2></figcaption>
+          <div class="plot"></div>
+        </figure>
+        <figure class="card" id="chart-rate">
+          <figcaption>
+            <h2>Bond rate</h2>
+            <p>Tokens bonded ÷ tokens created, same UTC day</p>
+          </figcaption>
+          <div class="plot"></div>
+        </figure>
+        <figure class="card" id="chart-ttb">
+          <figcaption>
+            <h2>Time to bond</h2>
+            <p><span class="key line"></span>Median <span class="key band"></span>Middle 50% (p25–p75)</p>
+          </figcaption>
+          <div class="plot"></div>
+        </figure>
+        <figure class="card wide" id="chart-high">
+          <figcaption>
+            <h2>High of bonded tokens</h2>
+            <p>
+              Peak market cap in the first 24h after bonding, by bond day.
+              <span class="key line"></span>Median <span class="key band"></span>Middle 50%
+              <span class="key hollow"></span>Still settling
+            </p>
+          </figcaption>
+          <div class="plot"></div>
+        </figure>
+      </section>
+
+      <section class="card" aria-labelledby="top-title">
+        <div class="card-head">
+          <h2 id="top-title">Top bonded tokens</h2>
+          <label class="select">Bond day <select id="top-day"></select></label>
+        </div>
+        <div class="table-wrap"><table id="top-table"></table></div>
+      </section>
+
+      <details class="card">
+        <summary><h2>All daily numbers</h2></summary>
+        <div class="table-wrap"><table id="daily-table"></table></div>
+      </details>
+
+      <footer class="foot">
+        <p>
+          Data: on-chain pump.fun program events via <a href="https://dune.com" rel="noopener">Dune</a>,
+          post-bond prices via <a href="https://www.geckoterminal.com" rel="noopener">GeckoTerminal</a>.
+          Refreshed every 3 hours, so the latest numbers lag by up to about 4 hours. Days are UTC.
+        </p>
+        <p>
+          <strong>Bonded</strong> = the bonding curve filled (CompleteEvent).
+          <strong>Time to bond</strong> = bond time − create time.
+          <strong>High</strong> = highest 15-minute candle in the 24h after bonding × 1B supply; a single
+          spike trade can set it, which is why the median is shown. Not financial advice.
+        </p>
+      </footer>
+    </main>
+    <div class="tooltip" id="tooltip" role="status" hidden></div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
