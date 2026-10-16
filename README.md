@@ -45,9 +45,30 @@ What to expect:
   (a free [Helius](https://helius.dev) URL is more reliable).
 - Bonded-token highs fill in from GeckoTerminal every 15 minutes and settle 24h after each bond.
 
-To keep it running 24/7, run the same command on an always-on machine (e.g. an Oracle Cloud
-Always Free VM) and push `data/state.json` and `public/data.json` to GitHub on a schedule, so
-Vercel picks them up.
+### Running it 24/7 on a server
+
+On any always-on Linux machine (e.g. an Oracle Cloud *Always Free* Ubuntu VM):
+
+```sh
+# Node 22
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs git
+
+# Push access for this repo only: add the printed key in GitHub → repo Settings →
+# Deploy keys → Add deploy key, and tick "Allow write access"
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 && cat ~/.ssh/id_ed25519.pub
+
+git clone -b claude/friendly-ptolemy-ig8jx7 git@github.com:vishalsolana/memedashboard.git
+cd memedashboard
+git config user.name "dashboard-bot" && git config user.email "bot@users.noreply.github.com"
+
+# Keep it running and restart on reboot (edit User/WorkingDirectory if not "ubuntu")
+sudo cp deploy/memedashboard.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now memedashboard
+journalctl -u memedashboard -f     # live logs
+```
+
+`PUBLISH_MINUTES=30` in the service file commits and pushes the data files every 30 minutes, and
+Vercel redeploys on each push. Keep it at 30 or more: the Vercel Hobby plan allows 100 deploys a day.
 
 ## Batch setup (Bitquery + GitHub Actions)
 

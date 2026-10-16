@@ -9,7 +9,10 @@
 //   SOLANA_RPC_URL       RPC for create times of tokens created before the listener started
 //   CREATE_MEMORY_DAYS   how long to remember create times for time-to-bond (default 3)
 //   ENRICH_MINUTES       how often to fetch create times and highs (default 15)
+//   PUBLISH_MINUTES      commit + push the data files every N minutes so Vercel
+//                        redeploys (default 0 = off; needs a git clone with push access)
 
+import { execFile } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -31,6 +34,7 @@ const PORT = Number(env.PORT ?? 3000);
 const PUMPPORTAL_URL = env.PUMPPORTAL_URL || DEFAULT_FEED;
 const MEMORY = Number(env.CREATE_MEMORY_DAYS ?? 3) * DAY;
 const ENRICH_MS = Number(env.ENRICH_MINUTES ?? 15) * 60_000;
+const PUBLISH_MS = Number(env.PUBLISH_MINUTES ?? 0) * 60_000;
 const STALE_MS = 90_000; // reconnect if nothing arrives for this long
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -130,6 +134,25 @@ async function enrich() {
   }
 }
 
+// Pushes the data files to the current branch. Vercel redeploys on each push,
+// so keep the interval at 30 minutes or more (Hobby allows 100 deploys a day).
+async function publish() {
+  const git = (...args) =>
+    new Promise((resolve, reject) =>
+      execFile('git', args, { cwd: root }, (err, stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve(stdout))),
+    );
+  try {
+    await git('add', 'data/state.json', 'public/data.json');
+    if (!(await git('status', '--porcelain', 'data/state.json', 'public/data.json')).trim()) return;
+    await git('commit', '-m', `data: live update ${new Date().toISOString().slice(0, 16)}Z`);
+    await git('pull', '--rebase', '--autostash');
+    await git('push');
+    log('published data to GitHub');
+  } catch (err) {
+    log(`publish failed: ${err.message.trim().split('\n')[0]}`);
+  }
+}
+
 function serve() {
   const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
   createServer((req, res) => {
@@ -196,6 +219,11 @@ setTimeout(() => {
   enrich();
   setInterval(enrich, ENRICH_MS);
 }, 60_000);
+
+if (PUBLISH_MS) {
+  log(`publishing to GitHub every ${PUBLISH_MS / 60_000} min`);
+  setInterval(() => save().then(publish), PUBLISH_MS);
+}
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
