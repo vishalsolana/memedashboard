@@ -40,7 +40,15 @@ command -v git >/dev/null 2>&1 || $SUDO apt-get install -y git
 
 say "Downloading the project to $DIR"
 if [ -d "$DIR/.git" ]; then
+  # The listener rewrites tracked data files; keep the live copies across the update.
+  BACKUP="$(mktemp -d)"
+  for f in data/state.json public/data.json; do
+    [ -f "$DIR/$f" ] && mkdir -p "$BACKUP/$(dirname "$f")" && cp "$DIR/$f" "$BACKUP/$f"
+  done
+  git -C "$DIR" checkout -- data/state.json public/data.json 2>/dev/null || true
   git -C "$DIR" pull --ff-only
+  cp -r "$BACKUP"/. "$DIR"/
+  rm -rf "$BACKUP"
 else
   git clone -b "$BRANCH" "$REPO" "$DIR"
 fi
