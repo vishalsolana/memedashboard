@@ -45,7 +45,18 @@ What to expect:
   (a free [Helius](https://helius.dev) URL is more reliable).
 - Bonded-token highs fill in from GeckoTerminal every 15 minutes and settle 24h after each bond.
 
-### Running it 24/7 on a server
+### Running it 24/7 on a server (simple)
+
+On an Ubuntu server such as a DigitalOcean droplet, one command installs everything and runs it as a
+service on port 3100 (the repo must be public, or the script can't download it):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/vishalsolana/memedashboard/claude/friendly-ptolemy-ig8jx7/deploy/install.sh | bash
+```
+
+Then open `http://YOUR_SERVER_IP:3100`. Run the same command again to update.
+
+### Also publishing to Vercel (optional)
 
 On any always-on Linux machine (e.g. an Oracle Cloud *Always Free* Ubuntu VM):
 
