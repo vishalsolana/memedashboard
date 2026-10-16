@@ -35,23 +35,28 @@ function ago(iso) {
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const row = (k, v) => `<div class="row"><span>${k}</span><b>${v}</b></div>`;
 
+const REFRESH_MS = 60_000; // the live listener saves once a minute
+let topPick = null; // bond day picked in the top-tokens table, kept across refreshes
+
 async function load() {
   try {
     const res = await fetch('data.json', { cache: 'no-cache' });
     if (!res.ok) throw new Error(res.status);
     data = await res.json();
   } catch {
-    $('updated').textContent = 'Could not load data.';
+    // Keep showing the last good data if a background refresh fails.
+    if (!data) $('updated').textContent = 'Could not load data.';
     return;
   }
+  $('tooltip').hidden = true;
   const any = (data.days ?? []).some((d) => d.created != null);
   $('updated').textContent = !data.last_sync
     ? 'Waiting for the first data refresh'
     : data.counting_since
-      ? `Live feed · updated ${ago(data.last_sync)} · counting since ${fmtTime(data.counting_since)} · UTC days`
+      ? `Live feed · updates automatically · last saved ${ago(data.last_sync)} · counting since ${fmtTime(data.counting_since)} · UTC days`
       : `Updated ${ago(data.last_sync)} · refreshed every 3h · UTC days`;
+  $('notice').hidden = any;
   if (!any) {
-    $('notice').hidden = false;
     $('notice').textContent = 'No data yet. Start the listener (npm run listen) or run the data workflow (see README).';
   }
   renderTiles();
@@ -188,7 +193,8 @@ function renderTop() {
     return;
   }
   const latestFull = days.find((d) => !data.days.find((x) => x.day === d)?.partial) ?? days[0];
-  select.innerHTML = days.map((d) => `<option value="${d}"${d === latestFull ? ' selected' : ''}>${fmtDay(d)}</option>`).join('');
+  const pick = days.includes(topPick) ? topPick : latestFull;
+  select.innerHTML = days.map((d) => `<option value="${d}"${d === pick ? ' selected' : ''}>${fmtDay(d)}</option>`).join('');
   const draw = () => {
     const list = data.top[select.value] ?? [];
     $('top-table').innerHTML =
@@ -205,7 +211,10 @@ function renderTop() {
         .join('') +
       '</tbody>';
   };
-  select.onchange = draw;
+  select.onchange = () => {
+    topPick = select.value;
+    draw();
+  };
   draw();
 }
 
@@ -235,3 +244,10 @@ document.querySelectorAll('[data-range]').forEach((btn) =>
 );
 
 load();
+// Refresh in the background; pause while the tab is hidden and catch up when it's shown again.
+setInterval(() => {
+  if (!document.hidden) load();
+}, REFRESH_MS);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) load();
+});

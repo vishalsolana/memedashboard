@@ -51,27 +51,48 @@ let ws = null;
 let connectedAt = null;
 let lastMessageAt = null;
 let retry = 0;
+let reconnectTimer = null;
+const CONNECT_TIMEOUT_MS = 20_000;
 
 function connect() {
-  ws = new WebSocket(PUMPPORTAL_URL);
-  ws.onopen = () => {
+  const sock = new WebSocket(PUMPPORTAL_URL);
+  ws = sock;
+  // Events from a socket we've already given up on are ignored.
+  const current = () => ws === sock;
+  sock.onopen = () => {
+    if (!current()) return sock.close();
     connectedAt = now();
     lastMessageAt = Date.now();
     retry = 0;
-    for (const sub of SUBSCRIBE) ws.send(JSON.stringify(sub));
+    for (const sub of SUBSCRIBE) sock.send(JSON.stringify(sub));
     log(`connected to ${PUMPPORTAL_URL}`);
   };
-  ws.onmessage = (e) => {
+  sock.onmessage = (e) => {
+    if (!current()) return;
     lastMessageAt = Date.now();
     handle(parseEvent(String(e.data), now()));
   };
-  ws.onerror = () => {}; // onclose follows with the details
-  ws.onclose = (e) => {
-    closeCoverage();
-    const wait = Math.min(60, 2 ** retry++) * 1000;
-    log(`disconnected (${e.code}${e.reason ? ` ${e.reason}` : ''}), reconnecting in ${wait / 1000}s`);
-    setTimeout(connect, wait);
-  };
+  // Node's WebSocket may report a failed connection with only an error event
+  // (no close), so both paths reconnect.
+  sock.onerror = () => current() && reconnect('connection error');
+  sock.onclose = (e) => current() && reconnect(`disconnected (${e.code}${e.reason ? ` ${e.reason}` : ''})`);
+  setTimeout(() => current() && sock.readyState === WebSocket.CONNECTING && reconnect('connect timed out'), CONNECT_TIMEOUT_MS);
+}
+
+function reconnect(reason) {
+  if (reconnectTimer) return;
+  closeCoverage();
+  const old = ws;
+  ws = null;
+  try {
+    old?.close();
+  } catch {}
+  const wait = Math.min(60, 2 ** retry++) * 1000;
+  log(`${reason}, reconnecting in ${wait / 1000}s`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, wait);
 }
 
 function handle(ev) {
@@ -211,8 +232,7 @@ setInterval(() => {
 }, 60_000);
 setInterval(() => {
   if (ws?.readyState === WebSocket.OPEN && Date.now() - lastMessageAt > STALE_MS) {
-    log('no messages for 90s, reconnecting');
-    ws.close();
+    reconnect('no messages for 90s');
   }
 }, 15_000);
 setTimeout(() => {
