@@ -43,8 +43,9 @@ export class Gecko {
   async findPool(mint) {
     const body = await this.get(`/networks/solana/tokens/${mint}/pools?page=1`);
     const pools = body?.data ?? [];
+    // Only the PumpSwap pool the token migrated into; other pools can be thin or stale.
     const pump = pools.find((p) => /pump/i.test(p.relationships?.dex?.data?.id ?? ''));
-    return (pump ?? pools[0])?.attributes?.address ?? null;
+    return pump?.attributes?.address ?? null;
   }
 
   // Returns { high, highAt, name, symbol } or null when the pool is unknown.

@@ -20,7 +20,14 @@ export function parseEvent(raw, nowSec) {
     return text ? { type: 'info', text: String(typeof text === 'string' ? text : JSON.stringify(text)) } : null;
   }
   const at = toSeconds(msg.timestamp) ?? nowSec;
-  const base = { mint: msg.mint, signature: msg.signature ?? null, at, name: msg.name ?? null, symbol: msg.symbol ?? null };
+  const base = {
+    mint: msg.mint,
+    signature: msg.signature ?? null,
+    at,
+    name: msg.name ?? null,
+    symbol: msg.symbol ?? null,
+    pool: msg.pool ?? null,
+  };
   if (msg.txType === 'create') {
     // The new-token stream can include other launchpads; count pump.fun only.
     if (msg.pool && msg.pool !== 'pump') return null;
@@ -30,6 +37,13 @@ export function parseEvent(raw, nowSec) {
   // is a migration (txType "migrate" in current payloads).
   if (msg.txType && !/migrat/i.test(msg.txType)) return null;
   return { type: 'bond', ...base };
+}
+
+// The migration stream also reports PumpSwap pools that anyone creates for any
+// token (tokenized stocks, stablecoins, ...). A real pump.fun bond is a token we
+// saw being created, or one with pump.fun's vanity "pump" mint suffix.
+export function isPumpFunMint(mint, seenCreates) {
+  return typeof mint === 'string' && (mint.endsWith('pump') || seenCreates.has(mint));
 }
 
 function toSeconds(t) {

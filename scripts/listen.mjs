@@ -14,18 +14,19 @@
 
 import { execFile } from 'node:child_process';
 import { createReadStream } from 'node:fs';
-import { readFile, writeFile, rename } from 'node:fs/promises';
+import { appendFile, readFile, writeFile, rename } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Gecko, updateHighs } from './lib/gecko.mjs';
-import { PUMPPORTAL_URL as DEFAULT_FEED, SUBSCRIBE, parseEvent } from './lib/pumpportal.mjs';
+import { PUMPPORTAL_URL as DEFAULT_FEED, SUBSCRIBE, isPumpFunMint, parseEvent } from './lib/pumpportal.mjs';
 import { fillCreateTimes, SolanaRpc } from './lib/rpc.mjs';
 import { addBonds, addCoverage, buildPublic, DAY, dayKey, emptyState, prune } from './lib/stats.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const STATE = join(root, 'data/state.json');
 const CREATES = join(root, 'data/creates.json');
+const SAMPLES = join(root, 'data/samples.jsonl'); // first raw feed messages, for checking the format
 const PUBLIC_DIR = join(root, 'public');
 const PUBLIC = join(PUBLIC_DIR, 'data.json');
 
@@ -45,7 +46,24 @@ if (typeof WebSocket === 'undefined') {
 
 const state = await loadJson(STATE, emptyState, (s) => s.version === 2);
 const creates = new Map(Object.entries(await loadJson(CREATES, () => ({}))));
-const counts = { creates: 0, bonds: 0 };
+const counts = { creates: 0, bonds: 0, skipped: 0 };
+const samples = { create: 0, other: 0 };
+
+// Data cleanup v3: drop non-pump.fun tokens the migration stream let in, and
+// re-fetch highs, since pools used to fall back to any pool GeckoTerminal listed.
+if ((state.cleanup ?? 0) < 3) {
+  let dropped = 0;
+  for (const [mint, t] of Object.entries(state.tokens)) {
+    if (!isPumpFunMint(mint, creates)) {
+      delete state.tokens[mint];
+      dropped++;
+      continue;
+    }
+    Object.assign(t, { pool: null, pool_lookups: 0, high_price: null, high_at: null, high_status: 'pending', high_final: false, high_fetched_at: null });
+  }
+  state.cleanup = 3;
+  log(`cleanup: removed ${dropped} non-pump.fun tokens, highs will be re-fetched`);
+}
 
 let ws = null;
 let connectedAt = null;
@@ -70,7 +88,10 @@ function connect() {
   sock.onmessage = (e) => {
     if (!current()) return;
     lastMessageAt = Date.now();
-    handle(parseEvent(String(e.data), now()));
+    const raw = String(e.data);
+    const ev = parseEvent(raw, now());
+    sample(ev, raw);
+    handle(ev);
   };
   // Node's WebSocket may report a failed connection with only an error event
   // (no close), so both paths reconnect.
@@ -105,6 +126,10 @@ function handle(ev) {
     counts.creates++;
     return;
   }
+  if (!isPumpFunMint(ev.mint, creates)) {
+    counts.skipped++;
+    return;
+  }
   addBonds(state, [{ mint: ev.mint, bonded_at: ev.at, signature: ev.signature }]);
   const t = state.tokens[ev.mint];
   t.symbol ??= ev.symbol;
@@ -116,6 +141,14 @@ function handle(ev) {
   counts.bonds++;
   const ttb = t.created_at != null ? ` after ${Math.round((t.bonded_at - t.created_at) / 60)}m` : '';
   log(`bonded ${t.symbol ?? ev.mint}${ttb}`);
+}
+
+// Keeps the first few raw messages of each kind so the feed's format can be checked.
+function sample(ev, raw) {
+  const kind = ev?.type === 'create' ? 'create' : 'other';
+  if (samples[kind] >= (kind === 'create' ? 5 : 30)) return;
+  samples[kind]++;
+  appendFile(SAMPLES, raw + '\n').catch(() => {});
 }
 
 function closeCoverage() {
@@ -227,8 +260,8 @@ await save();
 setInterval(() => save().catch((err) => log(`save failed: ${err.message}`)), 60_000);
 setInterval(() => writeAtomic(CREATES, JSON.stringify(Object.fromEntries(creates))).catch(() => {}), 5 * 60_000);
 setInterval(() => {
-  log(`last minute: ${counts.creates} created, ${counts.bonds} bonded`);
-  counts.creates = counts.bonds = 0;
+  log(`last minute: ${counts.creates} created, ${counts.bonds} bonded, ${counts.skipped} non-pump.fun migrations skipped`);
+  counts.creates = counts.bonds = counts.skipped = 0;
 }, 60_000);
 setInterval(() => {
   if (ws?.readyState === WebSocket.OPEN && Date.now() - lastMessageAt > STALE_MS) {
