@@ -16,7 +16,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Bitquery } from './lib/bitquery.mjs';
 import { Gecko, updateHighs } from './lib/gecko.mjs';
-import { SolanaRpc } from './lib/rpc.mjs';
+import { fillCreateTimes, SolanaRpc } from './lib/rpc.mjs';
 import { addBonds, addCreates, buildPublic, DAY, emptyState, nextWindow, prune } from './lib/stats.mjs';
 
 const root = new URL('../', import.meta.url);
@@ -84,24 +84,6 @@ async function main() {
   await writeFile(STATE, JSON.stringify(state) + '\n');
   await writeFile(PUBLIC, JSON.stringify(buildPublic(state, now())) + '\n');
   console.log(`wrote ${Object.keys(state.tokens).length} tokens, ${Object.keys(state.days).length} days`);
-}
-
-// Create times Bitquery could not see, newest bonds first, within the RPC budget.
-async function fillCreateTimes(state, rpc) {
-  const queue = Object.entries(state.tokens)
-    .filter(([, t]) => t.created_at == null && !t.create_checked)
-    .sort(([, a], [, b]) => b.bonded_at - a.bonded_at);
-  let found = 0;
-  for (const [mint, t] of queue) {
-    const at = await rpc.createTime(mint, t.bond_sig);
-    if (at === undefined) break; // budget ran out mid-walk; retry next run
-    t.create_checked = true;
-    if (at != null && at <= t.bonded_at) {
-      t.created_at = at;
-      found++;
-    }
-  }
-  return { found, left: queue.length - found };
 }
 
 async function loadState() {

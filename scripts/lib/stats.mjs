@@ -51,6 +51,26 @@ export function addBonds(state, bonds) {
   return added;
 }
 
+// Coverage: [start, end] intervals (unix seconds) when a live listener was
+// connected. Days it only partly covers are shown as partial counts.
+export function addCoverage(state, start, end) {
+  if (!(end > start)) return;
+  const list = [...(state.coverage ?? []), [start, end]].sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const [a, b] of list) {
+    const last = merged[merged.length - 1];
+    if (last && a <= last[1] + 5) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+  state.coverage = merged;
+}
+
+export function coveredSeconds(state, from, to) {
+  let total = 0;
+  for (const [a, b] of state.coverage ?? []) total += Math.max(0, Math.min(b, to) - Math.max(a, from));
+  return total;
+}
+
 function newToken() {
   return {
     created_at: null,
@@ -76,6 +96,7 @@ export function prune(state, now) {
   for (const day of Object.keys(state.days)) {
     if (day < cutoffKey) delete state.days[day];
   }
+  if (state.coverage) state.coverage = state.coverage.filter(([, b]) => b >= cutoff);
   for (const [mint, t] of Object.entries(state.tokens)) {
     if (t.bonded_at < cutoff) delete state.tokens[mint];
   }
@@ -131,9 +152,15 @@ export function buildPublic(state, now) {
     const pending = bonded.filter((t) => !t.high_final).length;
     const missing = bonded.filter((t) => t.high_final && t.high_price == null).length;
 
+    // Without coverage intervals (batch sources) every day counts as fully covered.
+    const coverage = state.coverage
+      ? coveredSeconds(state, start, Math.min(start + DAY, now)) / Math.max(1, Math.min(start + DAY, now) - start)
+      : null;
+
     days.push({
       day: key,
       partial: i === 0,
+      coverage: coverage == null ? null : Math.round(coverage * 1000) / 1000,
       created,
       bonded: created == null && bonded.length === 0 ? null : bonded.length,
       bond_rate: created ? bonded.length / created : null,
@@ -169,6 +196,7 @@ export function buildPublic(state, now) {
   return {
     generated_at: new Date(now * 1000).toISOString(),
     last_sync: state.cursor,
+    counting_since: state.coverage?.[0]?.[0] ? new Date(state.coverage[0][0] * 1000).toISOString() : null,
     window_days: WINDOW_DAYS,
     method: {
       bonded: 'pump.fun migrate instruction (curve filled, moved to PumpSwap), counted on the UTC day it happened',

@@ -21,7 +21,38 @@ GitHub Actions (every 3h)
 Vercel → static site in public/ reads data.json
 ```
 
-## Setup
+## Quick test: live listener (free, no keys)
+
+The listener connects to [PumpPortal](https://pumpportal.fun)'s free live feed, counts every new
+pump.fun token and every migration (bond), and serves the dashboard locally.
+
+1. Install [Node.js 22 or newer](https://nodejs.org).
+2. Download this repo (green **Code** button → *Download ZIP*, or `git clone`) and open a terminal
+   in the folder.
+3. Run:
+   ```sh
+   npm run listen
+   ```
+4. Open **http://localhost:3000**. Numbers start at zero and grow live. The terminal prints a line
+   per bond and a summary every minute. Stop it with **Ctrl+C**; it saves before exiting, and
+   continues counting when you start it again.
+
+What to expect:
+- Counting starts when you start it; there's no history. Each day shows how much of it the
+  listener covered, and days it didn't fully cover are drawn faded.
+- Time to bond is exact for tokens created while it runs. For older tokens it looks up the create
+  time on Solana RPC every 15 minutes. That uses the public RPC unless you set `SOLANA_RPC_URL`
+  (a free [Helius](https://helius.dev) URL is more reliable).
+- Bonded-token highs fill in from GeckoTerminal every 15 minutes and settle 24h after each bond.
+
+To keep it running 24/7, run the same command on an always-on machine (e.g. an Oracle Cloud
+Always Free VM) and push `data/state.json` and `public/data.json` to GitHub on a schedule, so
+Vercel picks them up.
+
+## Batch setup (Bitquery + GitHub Actions)
+
+The scheduled workflow is paused while the live listener is used; uncomment `schedule:` in
+`.github/workflows/update-data.yml` to switch back.
 
 ### 1. Bitquery token
 1. Sign up at [bitquery.io](https://bitquery.io).

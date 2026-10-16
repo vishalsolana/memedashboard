@@ -1,8 +1,10 @@
 name: Update data
 
 on:
-  schedule:
-    - cron: '17 */3 * * *' # every 3 hours
+  # Off while testing the PumpPortal live listener (npm run listen), which writes
+  # the same files. Re-enable to use the Bitquery batch source instead.
+  # schedule:
+  #   - cron: '17 */3 * * *' # every 3 hours
   workflow_dispatch:
     inputs:
       max_gecko_calls:

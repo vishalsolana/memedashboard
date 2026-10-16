@@ -44,14 +44,15 @@ async function load() {
     $('updated').textContent = 'Could not load data.';
     return;
   }
-  const full = (data.days ?? []).filter((d) => !d.partial && d.created != null);
-  $('updated').textContent = data.last_sync
-    ? `Updated ${ago(data.last_sync)} · refreshed every 3h · UTC days`
-    : 'Waiting for the first data refresh';
-  if (!full.length) {
+  const any = (data.days ?? []).some((d) => d.created != null);
+  $('updated').textContent = !data.last_sync
+    ? 'Waiting for the first data refresh'
+    : data.counting_since
+      ? `Live feed · updated ${ago(data.last_sync)} · counting since ${fmtTime(data.counting_since)} · UTC days`
+      : `Updated ${ago(data.last_sync)} · refreshed every 3h · UTC days`;
+  if (!any) {
     $('notice').hidden = false;
-    $('notice').textContent =
-      'No data yet. The GitHub Action fills this in on its first run (see README). Charts appear once a full UTC day is loaded.';
+    $('notice').textContent = 'No data yet. Start the listener (npm run listen) or run the data workflow (see README).';
   }
   renderTiles();
   renderCharts();
@@ -59,19 +60,37 @@ async function load() {
   renderDailyTable();
 }
 
-function fullDays() {
-  return data.days.filter((d) => !d.partial).slice(-range);
+// The selected range, ending with today (drawn faded as a partial day).
+function rangeDays() {
+  return data.days.slice(-range);
+}
+
+const isPartial = (d) => d.partial || (d.coverage != null && d.coverage < 0.99);
+
+function dayTitle(d) {
+  const notes = [];
+  if (d.partial) notes.push('so far');
+  if (d.coverage === 0) notes.push('not tracked');
+  else if (d.coverage != null && d.coverage < 0.99) notes.push(`${Math.round(d.coverage * 100)}% of day covered`);
+  return `<strong>${fmtDay(d.day)}${notes.length ? ` · ${notes.join(' · ')}` : ''}</strong>`;
+}
+
+function fmtTime(iso) {
+  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC', hour12: false }) + ' UTC';
 }
 
 function renderTiles() {
   const full = data.days.filter((d) => !d.partial && d.created != null);
-  const y = full[full.length - 1];
   const today = data.days.find((d) => d.partial);
+  // Until a full day exists (first day of a live listener), show today so far.
+  const y = full[full.length - 1] ?? (today?.created != null ? today : null);
   if (!y) {
     $('tiles').replaceChildren();
     return;
   }
-  const label = fmtDay(y.day);
+  const label = y.partial
+    ? 'Today so far'
+    : `${fmtDay(y.day)}${isPartial(y) ? ` · ${Math.round(y.coverage * 100)}% covered` : ''}`;
   const tiles = [
     ['Tokens created', fmtNum(y.created), label],
     ['Tokens bonded', fmtNum(y.bonded), label],
@@ -86,39 +105,39 @@ function renderTiles() {
   $('tiles').innerHTML = tiles
     .map(([l, v, n]) => `<div class="tile"><div class="label">${l}</div><div class="value">${v}</div><div class="note">${n}</div></div>`)
     .join('');
-  $('today').textContent = today?.created != null
+  $('today').textContent = today?.created != null && y !== today
     ? `Today so far (UTC): ${fmtNum(today.created)} created · ${fmtNum(today.bonded)} bonded`
     : '';
 }
 
 function renderCharts() {
-  const days = fullDays();
+  const days = rangeDays();
   const s1 = 'var(--series-1)';
   const s2 = 'var(--series-2)';
 
   chart(document.querySelector('#chart-created .plot'), {
     kind: 'column',
     color: s1,
-    points: days.map((d) => ({ day: d.day, y: d.created })),
+    points: days.map((d) => ({ day: d.day, y: d.created, faded: isPartial(d), d })),
     yFormat: fmtNum,
-    tip: (p) => `<strong>${fmtDay(p.day)}</strong>${row('Created', fmtNum(p.y))}`,
+    tip: (p) => `${dayTitle(p.d)}${row('Created', fmtNum(p.y))}`,
   });
 
   chart(document.querySelector('#chart-bonded .plot'), {
     kind: 'column',
     color: s2,
-    points: days.map((d) => ({ day: d.day, y: d.bonded })),
+    points: days.map((d) => ({ day: d.day, y: d.bonded, faded: isPartial(d), d })),
     yFormat: fmtNum,
-    tip: (p) => `<strong>${fmtDay(p.day)}</strong>${row('Bonded', fmtNum(p.y))}`,
+    tip: (p) => `${dayTitle(p.d)}${row('Bonded', fmtNum(p.y))}`,
   });
 
   chart(document.querySelector('#chart-rate .plot'), {
     kind: 'line',
     color: s2,
-    points: days.map((d) => ({ day: d.day, y: d.bond_rate, d })),
+    points: days.map((d) => ({ day: d.day, y: d.bond_rate, hollow: isPartial(d), d })),
     yFormat: (v) => `${+(v * 100).toFixed(2)}%`,
     tip: (p) =>
-      `<strong>${fmtDay(p.day)}</strong>${row('Bond rate', fmtPct(p.y))}` +
+      `${dayTitle(p.d)}${row('Bond rate', fmtPct(p.y))}` +
       row('Bonded', fmtNum(p.d.bonded)) + row('Created', fmtNum(p.d.created)),
   });
 
@@ -127,11 +146,11 @@ function renderCharts() {
   chart(document.querySelector('#chart-ttb .plot'), {
     kind: 'line',
     color: s2,
-    points: days.map((d) => ({ day: d.day, y: min(d.ttb?.median), lo: min(d.ttb?.p25), hi: min(d.ttb?.p75), d })),
+    points: days.map((d) => ({ day: d.day, y: min(d.ttb?.median), lo: min(d.ttb?.p25), hi: min(d.ttb?.p75), hollow: isPartial(d), d })),
     ticks: durationTicks,
     yFormat: (m) => fmtDur(m * 60),
     tip: (p) =>
-      `<strong>${fmtDay(p.day)}</strong>` +
+      dayTitle(p.d) +
       (p.d.ttb
         ? row('Median', fmtDur(p.d.ttb.median)) + row('p25 – p75', `${fmtDur(p.d.ttb.p25)} – ${fmtDur(p.d.ttb.p75)}`) +
           row('Average', fmtDur(p.d.ttb.mean)) + row('Fastest', fmtDur(p.d.ttb.min)) + row('Tokens', fmtNum(p.d.ttb.n))
@@ -146,12 +165,12 @@ function renderCharts() {
       y: d.high?.median ?? null,
       lo: d.high?.p25 ?? null,
       hi: d.high?.p75 ?? null,
-      hollow: d.high != null && !d.high_final,
+      hollow: (d.high != null && !d.high_final) || isPartial(d),
       d,
     })),
     yFormat: fmtUsd,
     tip: (p) =>
-      `<strong>${fmtDay(p.day)}${p.hollow ? ' · settling' : ''}</strong>` +
+      dayTitle(p.d) + (p.d.high && !p.d.high_final ? row('Highs', 'still settling') : '') +
       (p.d.high
         ? row('Median', fmtUsd(p.d.high.median)) + row('p25 – p75', `${fmtUsd(p.d.high.p25)} – ${fmtUsd(p.d.high.p75)}`) +
           row('Average', fmtUsd(p.d.high.mean)) + row('Highest', fmtUsd(p.d.high.max)) + row('Tokens', fmtNum(p.d.high.n)) +
@@ -193,11 +212,12 @@ function renderTop() {
 function renderDailyTable() {
   const rows = [...data.days].reverse();
   $('daily-table').innerHTML =
-    '<thead><tr><th>Day (UTC)</th><th>Created</th><th>Bonded</th><th>Bond rate</th><th>Median TTB</th><th>Avg TTB</th><th>Median high</th><th>Avg high</th></tr></thead><tbody>' +
+    '<thead><tr><th>Day (UTC)</th><th>Coverage</th><th>Created</th><th>Bonded</th><th>Bond rate</th><th>Median TTB</th><th>Avg TTB</th><th>Median high</th><th>Avg high</th></tr></thead><tbody>' +
     rows
       .map(
         (d) =>
-          `<tr><td>${d.day}${d.partial ? ' <span class="muted">(so far)</span>' : ''}</td><td>${fmtNum(d.created)}</td>` +
+          `<tr><td>${d.day}${d.partial ? ' <span class="muted">(so far)</span>' : ''}</td>` +
+          `<td>${d.coverage == null ? '–' : `${Math.round(d.coverage * 100)}%`}</td><td>${fmtNum(d.created)}</td>` +
           `<td>${fmtNum(d.bonded)}</td><td>${fmtPct(d.bond_rate)}</td><td>${fmtDur(d.ttb?.median)}</td>` +
           `<td>${fmtDur(d.ttb?.mean)}</td><td>${fmtUsd(d.high?.median)}${d.high && !d.high_final ? ' <span class="muted">*</span>' : ''}</td>` +
           `<td>${fmtUsd(d.high?.mean)}</td></tr>`,

@@ -3,8 +3,11 @@
   "private": true,
   "type": "module",
   "description": "Pump.fun daily stats dashboard: tokens created, bonded, time to bond and post-bond highs.",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
+    "listen": "node scripts/listen.mjs",
     "update": "node scripts/update.mjs",
     "test": "node --test test/*.test.mjs",
     "dev": "npx --yes serve@14.2.4 public"

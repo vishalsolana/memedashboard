@@ -59,4 +59,22 @@ export class SolanaRpc {
   }
 }
 
+// Create times the main source could not see, newest bonds first, within the RPC budget.
+export async function fillCreateTimes(state, rpc) {
+  const queue = Object.entries(state.tokens)
+    .filter(([, t]) => t.created_at == null && !t.create_checked)
+    .sort(([, a], [, b]) => b.bonded_at - a.bonded_at);
+  let found = 0;
+  for (const [mint, t] of queue) {
+    const at = await rpc.createTime(mint, t.bond_sig);
+    if (at === undefined) break; // budget ran out mid-walk; retry next run
+    t.create_checked = true;
+    if (at != null && at <= t.bonded_at) {
+      t.created_at = at;
+      found++;
+    }
+  }
+  return { found, left: queue.length - found };
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

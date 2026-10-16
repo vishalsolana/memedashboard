@@ -57,7 +57,7 @@ function render(plot, { kind, points, color, yFormat, tip, ticks: makeTicks = ni
     const bw = Math.min(24, Math.max(2, step - 2));
     points.forEach((p, i) => {
       if (p.y == null || p.y <= 0) return;
-      svg.append(el('path', { d: roundTop(cx(i) - bw / 2, sy(p.y), bw, sy(0) - sy(p.y), Math.min(4, bw / 2)), fill: color }));
+      svg.append(el('path', { d: roundTop(cx(i) - bw / 2, sy(p.y), bw, sy(0) - sy(p.y), Math.min(4, bw / 2)), fill: color, opacity: p.faded ? 0.4 : 1 }));
     });
   } else {
     const band = segments(points, (p) => p.lo != null && p.hi != null);
