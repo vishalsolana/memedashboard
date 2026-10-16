@@ -20,7 +20,7 @@ say "Checking Node.js"
 node_major() { node -v 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/' || echo 0; }
 if ! command -v node >/dev/null 2>&1; then
   $SUDO apt-get update -y
-  curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO -E bash -
+  curl -fsSL https://deb.nodesource.com/setup_22.x | ${SUDO:+$SUDO -E} bash -
   $SUDO apt-get install -y nodejs
 elif [ "$(node_major)" -lt 22 ]; then
   echo "System Node is $(node -v); installing Node 22 with nvm just for this project."
